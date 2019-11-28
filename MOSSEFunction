@@ -1,0 +1,249 @@
+# =============================================================================
+# %% Init Variables
+# =============================================================================
+
+
+
+# =============================================================================
+# %% Import
+# =============================================================================
+import numpy as np
+from numpy.fft import fft2
+import cv2
+
+# =============================================================================
+# %% Defs
+# =============================================================================
+
+'''
+function val = gaussC(x, y, sigma,  center)
+    xc = center(1);
+    yc = center(2);
+    exponent = ((x-xc).^2 + (y-yc).^2)./(2*sigma);
+    val       = (exp(-exponent));
+end
+'''
+
+def gaussC(x,y,sigma,center_x,center_y):
+    xc = center_x
+    yc = center_y
+    exponent = ((x-xc)**2 + (y-yc)**2)/(2*sigma)
+    val = (exp(-exponent))
+    return val
+
+'''
+function img = preprocess(img)
+    [r,c] = size(img);
+    win = window2(r,c,@hann);
+    eps = 1e-5;
+    img = log(double(img)+1);
+    img = (img-mean(img(:)))/(std(img(:))+eps);
+    img = img.*win;
+end
+'''
+
+def preprocess(img):
+    r,c,_ = frame.shape()
+    # win = window2(r,c,@hann);
+    win = window2(r,c)
+    eps = 1e-5
+    img = np.log(double(img)+1)
+    _ = img.flatten()
+    img = np.divide( (img-mean( _ ) ),(std( _ )+eps) )
+    
+    # img = img.*win
+    img = np.multiply(img,win)
+    
+    return img
+
+'''
+function w=window2(N,M,w_func)
+    wc=window(w_func,N);
+    wr=window(w_func,M);
+    [maskr,maskc]=meshgrid(wr,wc);
+    
+    %maskc=repmat(wc,1,M); Old version
+    %maskr=repmat(wr',N,1);
+    
+    w=maskr.*maskc;
+end
+'''
+
+def window2(N,M):
+    
+    wc = np.hanning(N)
+    wr = np.hanning(M)
+    
+    [maskr,maskc] = np.mgrid(wr,wc)
+    
+    # w=maskr.*mask;
+    w = np.multiply(maskr,maskc)
+    
+    return w
+
+'''
+function img = rand_warp(img)
+    a = -180/16;
+    b = 180/16;
+    r = a + (b-a).*rand;
+    sz = size(img);
+    scale = 1-0.1 + 0.2.*rand;
+    % trans_scale = randi([-4,4], 1, 1);
+    img = imresize(imresize(imrotate(img, r), scale), [sz(1) sz(2)]);
+'''
+
+def rand_warp(img):
+
+    a = -180/16;
+    b = 180/16;
+    rand = np.random.rand(1)
+    r = a + np.multiply((b-a),rand)
+    sz_y, sz_x, _ = img.shape
+    rand = np.random.rand(1)
+    scale = 1-0.1 +np.multiply( 0.2,rand)
+    # trans_scale = randi([-4,4], 1, 1);
+    img = cv2.resize( cv2.resize( rotateImage(img, r), (0,0), fx=scale, fy=scale), (sz_y, sz_x ) )
+
+    return img
+
+
+def rotateImage(image, angle):
+  image_center = tuple(np.array(image.shape[1::-1]) / 2)
+  rot_mat = cv2.getRotationMatrix2D(image_center, angle, 1.0)
+  result = cv2.warpAffine(image, rot_mat, image.shape[1::-1], flags=cv2.INTER_LINEAR)
+  return result
+
+# =============================================================================
+# %% CODE
+# =============================================================================
+
+
+
+
+
+# get images
+
+# select target
+sigma = 100;
+
+# Center of the target
+center_x = rect[1]+rect[3]/2
+center_y = rect[0]+rect[2]/2
+
+# Get Sizes
+# gsize = size(im);
+h,w,_ = frame.shape()
+
+# Create a Grid? 
+# [R,C] = ndgrid(1:gsize(1), 1:gsize(2));
+[R,C] = np.mgrid[0:h,0:w]
+
+# g = gaussC(R,C, sigma, center_x, center_y); # Function
+g = gaussC(x,y,sigma,center_x,center_y)
+
+# g = mat2gray(g);
+g = np.array(g * 255.0, dtype = np.uint8)
+threshed = cv2.adaptiveThreshold(g, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 3, 0)
+    
+
+# randomly warp original image to create training set
+'''
+if (size(im,3) == 3) 
+    img = rgb2gray(im);
+end
+'''
+
+image = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+# img = imcrop(img, rect);
+img = image[rect[0]:rect[2], rect[1]:rect[2]]
+
+g_ = g[rect[0]:rect[2], rect[1]:rect[2]]
+
+G = fft2(g_)
+
+'''
+height = size(g_,1);
+width = size(g_,2);
+'''
+
+height, width, _ = g_.shape
+
+# fi = preprocess(imresize(img, [height width]))
+_ = cv2.resize(img, ( int(height), int(width) ) )
+fi = preprocess( _ )
+
+# Ai = (G.*np.conj(numpy.fft.fft2(fi)))
+Ai = np.multiply(G,np.conj(fft2(fi)))
+
+# Bi = (fft2(fi).*conj(fft2(fi)))
+Bi = np.multiply( fft2(fi), np.conj( fft2(fi) ));
+
+N = 128;
+
+for i0 in range(N):
+    fi = preprocess(rand_warp(img))
+    Ai = Ai + np.multiply(G, np.conj( fft2(fi) ) )
+    Bi = Bi + np.multiply(fft2(fi) , np.conj(fft2(fi)) )
+
+
+# MOSSE online training regimen
+
+eta = 0.125;
+# fig = figure('Name', 'MOSSE');
+# mkdir(['results_' dataset]);
+
+for i0 in range(0,len(img_files)):
+    
+    # img = imread(img_files(i,:))
+    ''' Read new frames '''
+    
+    im = img;
+    
+    # img = rgb2gray(img);
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    
+    if (i0 == 1):
+        Ai = np.multiply(eta,Ai)
+        Bi = np.multiply(eta,Bi)
+    else:
+        
+        Hi = np.divide(Ai,B)
+        # fi = imcrop(img, rect);
+        img = image[rect[0]:rect[2], rect[1]:rect[2]]
+        fi = preprocess(cv2.resize(fi, (height, width)))
+        
+        _ = image = cv2.cvtColor( ifft2( np.multiply(Hi,fft2(fi)) ), cv2.COLOR_BGR2GRAY)
+        
+        # gi = uint8(255*mat2gray(ifft2(Hi.*fft2(fi))));
+        gi = 255*_
+        
+        _ = gi.flatten()
+        
+        maxval = max( _ )
+        P,Q = np.np.argmax( _ )
+        
+        # [P, Q] = find(gi == maxval)
+        
+        dx = mean(P)-height/2
+        dy = mean(Q)-width/2
+        
+        rect = [rect[0]+dy, rect[1]+dx, width, height]
+        # fi = imcrop(img, rect)
+        fi = img[rect[0]:rect[2], rect[1]:rect[2]]
+        fi = preprocess( cv2.resize(fi, (height, width) ) )
+        Ai = np.multiply(eta, np.multiply(G,conj(fft2(fi)) ) + np.multiply((1-eta),Ai)
+        Bi = np.multiply( eta, np.multiply(fft2(fi), no.conj(fft2(fi)) ) ) + np.multiply( (1-eta), Bi)
+
+
+
+
+
+
+
+
+
+
+
+
+
